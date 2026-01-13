@@ -3,32 +3,42 @@ using System.Collections;
 
 public class CameraShake : MonoBehaviour
 {
-    private static CameraShake instance;
-    private Vector3 originalPos;
+    public static CameraShake Instance;
+
+    Transform camTransform;
+    Vector3 originalPos;
+    Coroutine shakeRoutine;
 
     void Awake()
     {
-        instance = this;
-        originalPos = transform.localPosition;
+        Instance = this;
+        camTransform = transform;
+        originalPos = camTransform.localPosition;
     }
 
-    public static void Shake(float intensity, float duration)
+    public void Shake(float intensity, float duration)
     {
-        if (instance != null)
-            instance.StartCoroutine(instance.ShakeRoutine(intensity, duration));
+        if (shakeRoutine != null)
+            StopCoroutine(shakeRoutine);
+
+        shakeRoutine = StartCoroutine(ShakeRoutine(intensity, duration));
     }
 
     IEnumerator ShakeRoutine(float intensity, float duration)
     {
-        float timer = 0f;
-        while (timer < duration)
+        float t = 0f;
+
+        while (t < duration)
         {
-            timer += Time.deltaTime;
-            transform.localPosition = originalPos +
-                Random.insideUnitSphere * intensity;
+            t += Time.deltaTime;
+
+            Vector3 offset = Random.insideUnitSphere * intensity;
+            camTransform.localPosition = originalPos + offset;
+
             yield return null;
         }
 
-        transform.localPosition = originalPos;
+        camTransform.localPosition = originalPos;
+        shakeRoutine = null;
     }
 }

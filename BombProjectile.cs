@@ -32,9 +32,10 @@ public class BombProjectile : MonoBehaviour
     public GameObject defaultExplosionEffect;
     public ExplosionEffectRule[] layerExplosionEffects;
 
-    [Header("Screen Shake")]
-    public float shakeIntensity = 0.35f;
-    public float shakeDuration = 0.4f;
+    [Header("Camera Shake (Explosion Impact)")]
+    public float minShakeIntensity = 0.25f;
+    public float maxShakeIntensity = 0.6f;
+    public float shakeDuration = 0.45f;
 
     private Rigidbody rb;
     private Collider col;
@@ -78,10 +79,12 @@ public class BombProjectile : MonoBehaviour
             explosionFX.transform.localScale = Vector3.zero;
         }
 
-        // Gameplay effects
+        // ---------------- GAMEPLAY EFFECTS ----------------
         ApplyExplosionDamage(hitPoint);
         StartCoroutine(ShockwaveRoutine(hitPoint));
-        CameraShake.Shake(shakeIntensity, shakeDuration);
+
+        // ---------------- CAMERA SHAKE ----------------
+        TriggerExplosionShake(hitPoint);
 
         yield return new WaitForSeconds(hideDelay);
         HideBombVisuals();
@@ -107,100 +110,126 @@ public class BombProjectile : MonoBehaviour
         Destroy(gameObject);
     }
 
+    // ================= CAMERA SHAKE =================
+
+    void TriggerExplosionShake(Vector3 explosionPoint)
+    {
+        if (CameraShake.Instance == null)
+            return;
+
+        // Optional distance-based attenuation (player far = weaker shake)
+        float distance = Vector3.Distance(
+            CameraShake.Instance.transform.position,
+            explosionPoint
+        );
+
+        float distanceFactor = Mathf.Clamp01(1f - (distance / (explosionRadius * 3f)));
+
+        float finalShake = Mathf.Lerp(
+            minShakeIntensity,
+            maxShakeIntensity,
+            distanceFactor
+        );
+
+        CameraShake.Instance.Shake(finalShake, shakeDuration);
+    }
+
     // ================= SHOCKWAVE =================
 
-IEnumerator ShockwaveRoutine(Vector3 center)
-{
-    float maxShockRadius = explosionRadius * shockwaveMultiplier;
-    float stepTime = shockwaveDuration / shockwaveSteps;
-
-    float previousRadius = 0f;
-
-    for (int i = 1; i <= shockwaveSteps; i++)
+    IEnumerator ShockwaveRoutine(Vector3 center)
     {
-        float currentRadius = (i / (float)shockwaveSteps) * maxShockRadius;
+        float maxShockRadius = explosionRadius * shockwaveMultiplier;
+        float stepTime = shockwaveDuration / shockwaveSteps;
 
+        float previousRadius = 0f;
+
+        for (int i = 1; i <= shockwaveSteps; i++)
+        {
+            float currentRadius = (i / (float)shockwaveSteps) * maxShockRadius;
+
+            Collider[] hits = Physics.OverlapSphere(
+                center,
+                currentRadius,
+                damageLayers,
+                QueryTriggerInteraction.Ignore
+            );
+
+            foreach (Collider hit in hits)
+            {
+                Rigidbody hitRb = hit.attachedRigidbody;
+                if (hitRb == null) continue;
+
+                Vector3 closestPoint = hit.ClosestPoint(center);
+                float distance = Vector3.Distance(center, closestPoint);
+
+                if (distance <= previousRadius || distance > currentRadius)
+                    continue;
+
+                float normalized = distance / maxShockRadius;
+                float forceFactor = Mathf.Clamp01(1f - normalized);
+
+                hitRb.AddExplosionForce(
+                    explosionForce * forceFactor,
+                    center,
+                    maxShockRadius,
+                    0f,
+                    ForceMode.Impulse
+                );
+            }
+
+            previousRadius = currentRadius;
+            yield return new WaitForSeconds(stepTime);
+        }
+    }
+
+    // ================= DAMAGE =================
+
+    void ApplyExplosionDamage(Vector3 center)
+    {
         Collider[] hits = Physics.OverlapSphere(
             center,
-            currentRadius,
+            explosionRadius,
             damageLayers,
             QueryTriggerInteraction.Ignore
         );
 
         foreach (Collider hit in hits)
         {
-            Rigidbody hitRb = hit.attachedRigidbody;
-            if (hitRb == null) continue;
-
             Vector3 closestPoint = hit.ClosestPoint(center);
             float distance = Vector3.Distance(center, closestPoint);
 
-            // 🔥 SHELL CHECK (IMPORTANT)
-            if (distance <= previousRadius || distance > currentRadius)
+            if (distance > explosionRadius)
                 continue;
 
-            float normalized = distance / maxShockRadius;
-            float forceFactor = Mathf.Clamp01(1f - normalized);
+            float falloff = 1f - (distance / explosionRadius);
+            float damage = maxDamage * falloff;
 
-            hitRb.AddExplosionForce(
-                explosionForce * forceFactor,
-                center,
-                maxShockRadius,
-                0f,
-                ForceMode.Impulse
-            );
+            if (hit.TryGetComponent(out Health health))
+                health.TakeDamage(damage);
+
+            Rigidbody hitRb = hit.attachedRigidbody;
+            if (hitRb != null)
+            {
+                hitRb.AddExplosionForce(
+                    explosionForce * falloff,
+                    center,
+                    explosionRadius,
+                    0f,
+                    ForceMode.Impulse
+                );
+            }
         }
-
-        previousRadius = currentRadius;
-        yield return new WaitForSeconds(stepTime);
     }
-}
 
+    // ================= CHARGE DATA =================
 
-    // ================= DAMAGE =================
-
-void ApplyExplosionDamage(Vector3 center)
-{
-    Collider[] hits = Physics.OverlapSphere(
-        center,
-        explosionRadius,
-        damageLayers,
-        QueryTriggerInteraction.Ignore
-    );
-
-    foreach (Collider hit in hits)
+    public void SetChargeValues(float radius, float damageMultiplier)
     {
-        // 🔥 CRITICAL FIX
-        Vector3 closestPoint = hit.ClosestPoint(center);
-        float distance = Vector3.Distance(center, closestPoint);
-
-        if (distance > explosionRadius)
-            continue;
-
-        float falloff = 1f - (distance / explosionRadius);
-        float damage = maxDamage * falloff;
-
-        if (hit.TryGetComponent(out Health health))
-        {
-            health.TakeDamage(damage);
-        }
-
-        Rigidbody hitRb = hit.attachedRigidbody;
-        if (hitRb != null)
-        {
-            hitRb.AddExplosionForce(
-                explosionForce * falloff,
-                center,
-                explosionRadius,
-                0f,
-                ForceMode.Impulse
-            );
-        }
+        explosionRadius = radius;
+        maxDamage *= damageMultiplier;
     }
-}
 
-
-    // ================= VISUAL CONTROL =================
+    // ================= VISUAL =================
 
     void HideBombVisuals()
     {
