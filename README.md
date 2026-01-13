@@ -17,7 +17,6 @@ Armed with a toy-like bomb launcher that fires oversized, burning-thread bombs, 
 
 Destroy ghosts.  
 Survive the night.  
-And uncover what’s *really* happening.
 
 ---
 
@@ -43,13 +42,10 @@ Use the environment to your advantage — or accidentally destroy your safe zone
 
 ### 👻 Ghost Variations
 - Multiple ghost types with unique behaviors & side effects
-- Ghosts scale in threat over time
 - No cheap jumpscares — fear comes from pressure and chaos
 
 ### 🎁 Enemy Drops
 - **TNT sticks (Dynamite)** — different from player bombs
-  - Can damage the player
-  - Removes hearts on contact
 - **Land Mines** *(optional spawns)*
 
 ---
@@ -77,37 +73,16 @@ The haunted sandbox includes:
 - Trees, bushes, plants & pots  
 - Seed bags & sandbags near plantation area  
 - Climbing bars & dome-style hideout  
-  *(Kasukabe Defense Force HQ inspired)*
+  *(Kasukabe Defense Force HQ from Shinchan inspired)*
 
 Everything can be destroyed.  
 Nothing is truly safe.
 
 ---
 
-## 🎬 Cutscenes & Endings
-
-### 🎥 Mandatory Intro Cutscene
-Sets the tone, mystery, and emotional hook.
-
 ### 🌓 Multiple Endings
 - **Standard Game Over** – defeated by ghosts
 - **Hidden Ending** – survive long enough…
-
-#### Alternate Ending (Spoiler-Light)
-Mom arrives.  
-Reality shifts.  
-Were the ghosts real — or just imagination?
-
-A final moment during the credits hints otherwise.
-
----
-
-## 🎭 Game Over Presentation
-
-- Screen fades to black
-- A shrinking circular focus:
-  - Centers on the **player’s face** for the hidden ending
-  - Centers on the **defeat location** when you lose
 
 ---
 
