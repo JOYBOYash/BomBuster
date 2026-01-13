@@ -1,13 +1,28 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+
+        public enum RadiusOrientation
+    {
+        SurfaceAligned,
+        AlwaysHorizontal,
+        AlwaysVertical
+    }
+
 public class MGLLauncher : MonoBehaviour
 {
+
+
+
+  
+
+
     [Header("References")]
     public Transform firePoint;
     public Camera playerCamera;
     public GameObject bombPrefab;
     public LineRenderer trajectoryLine;
+    public LineRenderer explosionRadiusLine;
 
     [Header("Firing")]
     public float launchForce = 22f;
@@ -16,6 +31,23 @@ public class MGLLauncher : MonoBehaviour
     [Header("Trajectory")]
     public int trajectoryPoints = 30;
     public float trajectoryTimeStep = 0.1f;
+    public LayerMask trajectoryCollisionLayers;
+
+    [Header("Explosion Preview")]
+    public float explosionRadius = 6f;
+    public int explosionCircleSegments = 32;
+
+          [System.Serializable]
+    public struct RadiusLayerRule
+    {
+        public LayerMask layer;
+        public RadiusOrientation orientation;
+    }
+
+    [Header("Explosion Radius Orientation")]
+    public RadiusOrientation defaultRadiusOrientation = RadiusOrientation.SurfaceAligned;
+    public RadiusLayerRule[] radiusLayerRules;
+
 
     [Header("Spread")]
     public float spreadAngle = 1.5f;
@@ -48,7 +80,7 @@ public class MGLLauncher : MonoBehaviour
     {
         if (isAiming)
         {
-            DrawTrajectory();
+            DrawTrajectoryWithCollision();
         }
     }
 
@@ -56,23 +88,25 @@ public class MGLLauncher : MonoBehaviour
 
     private void OnFireStarted(InputAction.CallbackContext ctx)
     {
-        // Hold LMB → show trajectory
         if (Time.time < nextFireTime) return;
 
         isAiming = true;
         trajectoryLine.enabled = true;
+        explosionRadiusLine.enabled = true;
     }
 
     private void OnFireCanceled(InputAction.CallbackContext ctx)
     {
-        // Release LMB → shoot
         if (!isAiming) return;
 
         FireBomb();
-        trajectoryLine.enabled = false;
-        trajectoryLine.positionCount = 0;
-        isAiming = false;
 
+        trajectoryLine.positionCount = 0;
+        explosionRadiusLine.positionCount = 0;
+        trajectoryLine.enabled = false;
+        explosionRadiusLine.enabled = false;
+
+        isAiming = false;
         nextFireTime = Time.time + fireRate;
     }
 
@@ -80,58 +114,125 @@ public class MGLLauncher : MonoBehaviour
 
     void FireBomb()
     {
-        // 1️⃣ Spawn slightly forward so it doesn't intersect player
         Vector3 spawnPos = firePoint.position + playerCamera.transform.forward * 0.5f;
-
         GameObject bomb = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
 
         Rigidbody rb = bomb.GetComponent<Rigidbody>();
-        Collider bombCollider = bomb.GetComponent<Collider>();
+        rb.useGravity = true;
+        rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
 
-        // 2️⃣ Ignore collision with player
-        Collider playerCollider = playerCamera.GetComponentInParent<Collider>();
-        if (playerCollider != null && bombCollider != null)
-        {
-            Physics.IgnoreCollision(bombCollider, playerCollider);
-        }
-
-        // 3️⃣ Calculate firing direction
         Vector3 direction = playerCamera.transform.forward;
-
         direction = Quaternion.Euler(
             Random.Range(-spreadAngle, spreadAngle),
             Random.Range(-spreadAngle, spreadAngle),
             0f
         ) * direction;
 
-        // 4️⃣ Correct Rigidbody launch
-        rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
         rb.linearVelocity = direction * launchForce;
     }
 
+    // ================= TRAJECTORY + COLLISION =================
 
-    // ================= TRAJECTORY =================
-
-    void DrawTrajectory()
+    void DrawTrajectoryWithCollision()
     {
-        if (trajectoryLine == null) return;
-
-        trajectoryLine.positionCount = trajectoryPoints;
+        trajectoryLine.positionCount = 0;
+        explosionRadiusLine.positionCount = 0;
 
         Vector3 startPos = firePoint.position;
-        Vector3 startVelocity = playerCamera.transform.forward * launchForce;
+        Vector3 velocity = playerCamera.transform.forward * launchForce;
         Vector3 gravity = Physics.gravity;
 
-        for (int i = 0; i < trajectoryPoints; i++)
+        Vector3 previousPoint = startPos;
+        trajectoryLine.positionCount = 1;
+        trajectoryLine.SetPosition(0, previousPoint);
+
+        for (int i = 1; i < trajectoryPoints; i++)
         {
             float t = i * trajectoryTimeStep;
 
-            Vector3 point =
+            Vector3 nextPoint =
                 startPos +
-                startVelocity * t +
+                velocity * t +
                 0.5f * gravity * t * t;
 
-            trajectoryLine.SetPosition(i, point);
+            // Raycast between previous & next point
+            if (Physics.Raycast(
+                previousPoint,
+                nextPoint - previousPoint,
+                out RaycastHit hit,
+                Vector3.Distance(previousPoint, nextPoint),
+                trajectoryCollisionLayers
+            ))
+            {
+                // Stop trajectory at hit
+                trajectoryLine.positionCount++;
+                trajectoryLine.SetPosition(trajectoryLine.positionCount - 1, hit.point);
+
+               DrawExplosionRadius(hit.point, hit.normal, hit.collider);
+
+
+                return;
+            }
+
+            trajectoryLine.positionCount++;
+            trajectoryLine.SetPosition(trajectoryLine.positionCount - 1, nextPoint);
+
+            previousPoint = nextPoint;
         }
     }
+
+    // ================= EXPLOSION RADIUS =================
+
+void DrawExplosionRadius(Vector3 center, Vector3 normal, Collider hitCollider)
+{
+    RadiusOrientation orientation = GetOrientationForLayer(hitCollider.gameObject.layer);
+
+    Quaternion rotation;
+
+    switch (orientation)
+    {
+        case RadiusOrientation.AlwaysHorizontal:
+            rotation = Quaternion.identity; // flat on XZ plane
+            break;
+
+        case RadiusOrientation.AlwaysVertical:
+            rotation = Quaternion.Euler(90f, 0f, 0f); // vertical circle
+            break;
+
+        default: // SurfaceAligned
+            rotation = Quaternion.FromToRotation(Vector3.up, normal);
+            break;
+    }
+
+    explosionRadiusLine.positionCount = explosionCircleSegments;
+
+    for (int i = 0; i < explosionCircleSegments; i++)
+    {
+        float angle = (float)i / explosionCircleSegments * Mathf.PI * 2f;
+
+        Vector3 localPos = new Vector3(
+            Mathf.Cos(angle) * explosionRadius,
+            0f,
+            Mathf.Sin(angle) * explosionRadius
+        );
+
+        explosionRadiusLine.SetPosition(
+            i,
+            center + rotation * localPos
+        );
+    }
+}
+
+RadiusOrientation GetOrientationForLayer(int layer)
+{
+    foreach (var rule in radiusLayerRules)
+    {
+        if ((rule.layer.value & (1 << layer)) != 0)
+            return rule.orientation;
+    }
+
+    return defaultRadiusOrientation;
+}
+
+
 }
