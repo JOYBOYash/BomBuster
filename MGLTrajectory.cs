@@ -8,20 +8,8 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
     public LineRenderer trajectoryLine;
     public LineRenderer explosionRadiusLine;
 
-    [Header("Radius Colors")]
-    public Color wideRadiusColor = Color.red;
-    public Color midRadiusColor = Color.yellow;
-    public Color smallRadiusColor = Color.green;
-
-    [Tooltip("Threshold where radius is considered 'small / perfect'")]
-    public float perfectThreshold = 0.8f;
-
-    [Tooltip("Threshold where radius is considered 'medium'")]
-    public float mediumThreshold = 0.4f;
-
-
     [Header("Dependencies")]
-    public MGLOscillatingAim aimSystem;
+    public MGLPrecisionAim aimSystem;
     public MGLLauncher launcher;
 
     [Header("Trajectory")]
@@ -30,12 +18,33 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
     public LayerMask collisionLayers;
 
     [Header("Explosion Preview")]
-    public int circleSegments = 32;
+    public int circleSegments = 48;
 
-    [Header("Visual Feedback")]
-    public Gradient radiusColorGradient;
+    [Header("Visual Style")]
+    public float trajectoryScrollSpeed = 1.8f;
+    public float circleScrollSpeed = 1.2f;
+
+    [Header("Radius Colors")]
+    public Color wideRadiusColor = Color.red;
+    public Color midRadiusColor = Color.yellow;
+    public Color smallRadiusColor = Color.green;
+
+    [Header("Precision Thresholds")]
+    public float perfectThreshold = 0.8f;
+    public float mediumThreshold = 0.4f;
+
+    [Header("Pulse")]
     public float pulseSpeed = 6f;
-    public float pulseScale = 0.12f;
+    public float pulseScale = 0.15f;
+
+    Material trajMat;
+    Material circleMat;
+
+    void Awake()
+    {
+        trajMat = trajectoryLine.material;
+        circleMat = explosionRadiusLine.material;
+    }
 
     void Update()
     {
@@ -49,7 +58,17 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
         trajectoryLine.enabled = true;
         explosionRadiusLine.enabled = true;
 
+        AnimateMaterials();
         DrawTrajectory();
+    }
+
+    void AnimateMaterials()
+    {
+        if (trajMat != null)
+            trajMat.mainTextureOffset -= Vector2.right * Time.deltaTime * trajectoryScrollSpeed;
+
+        if (circleMat != null)
+            circleMat.mainTextureOffset -= Vector2.right * Time.deltaTime * circleScrollSpeed;
     }
 
     void DrawTrajectory()
@@ -57,7 +76,7 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
         trajectoryLine.positionCount = 0;
         explosionRadiusLine.positionCount = 0;
 
-        Vector3 startPos = firePoint.position;
+        Vector3 start = firePoint.position;
         Vector3 velocity =
             playerCamera.transform.forward *
             launcher.baseLaunchForce *
@@ -65,17 +84,14 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
 
         Vector3 gravity = Physics.gravity;
 
-        Vector3 prev = startPos;
+        Vector3 prev = start;
         trajectoryLine.positionCount = 1;
         trajectoryLine.SetPosition(0, prev);
 
         for (int i = 1; i < trajectoryPoints; i++)
         {
             float t = i * timeStep;
-            Vector3 next =
-                startPos +
-                velocity * t +
-                0.5f * gravity * t * t;
+            Vector3 next = start + velocity * t + 0.5f * gravity * t * t;
 
             if (Physics.Raycast(prev, next - prev, out RaycastHit hit,
                 Vector3.Distance(prev, next), collisionLayers))
@@ -94,56 +110,32 @@ public class MGLTrajectoryVisualizer : MonoBehaviour
 
     void DrawExplosionRadius(Vector3 center, Vector3 normal)
     {
-        explosionRadiusLine.positionCount = circleSegments;
+        float precision = aimSystem.CurrentPrecision01;
 
-        // 🔥 Use INVERTED value (small radius = high skill)
-        float inverted = 1f - aimSystem.CurrentCharge01;
+        Color color =
+            precision >= perfectThreshold ? smallRadiusColor :
+            precision >= mediumThreshold ? midRadiusColor :
+            wideRadiusColor;
 
-        // -------- COLOR SELECTION --------
-        Color targetColor;
-
-        if (inverted >= perfectThreshold)
-            targetColor = smallRadiusColor;      // 🟢 MAX DAMAGE
-        else if (inverted >= mediumThreshold)
-            targetColor = midRadiusColor;        // 🟡 MEDIUM
-        else
-            targetColor = wideRadiusColor;       // 🔴 LOW DAMAGE
-
-        // -------- APPLY COLOR TO MATERIAL --------
-        if (explosionRadiusLine.material != null)
-        {
-            explosionRadiusLine.material.color = targetColor;
-        }
-
-        // -------- PULSE (STRONGER NEAR PERFECT) --------
-        float pulseStrength = Mathf.InverseLerp(
-            mediumThreshold,
-            perfectThreshold,
-            inverted
-        );
+        if (circleMat != null)
+            circleMat.color = color;
 
         float pulse =
             Mathf.Sin(Time.time * pulseSpeed) *
             pulseScale *
-            pulseStrength;
+            precision;
 
         explosionRadiusLine.widthMultiplier = 1f + pulse;
+        explosionRadiusLine.positionCount = circleSegments + 1;
 
-        // -------- DRAW CIRCLE --------
         Quaternion rot = Quaternion.FromToRotation(Vector3.up, normal);
         float r = aimSystem.CurrentExplosionRadius;
 
-        for (int i = 0; i < circleSegments; i++)
+        for (int i = 0; i <= circleSegments; i++)
         {
             float angle = i / (float)circleSegments * Mathf.PI * 2f;
-            Vector3 local = new Vector3(
-                Mathf.Cos(angle) * r,
-                0f,
-                Mathf.Sin(angle) * r
-            );
-
+            Vector3 local = new Vector3(Mathf.Cos(angle) * r, 0f, Mathf.Sin(angle) * r);
             explosionRadiusLine.SetPosition(i, center + rot * local);
         }
     }
-
 }

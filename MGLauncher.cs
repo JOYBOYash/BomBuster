@@ -1,5 +1,5 @@
 using UnityEngine;
-using UnityEngine.InputSystem;
+using CartoonFX; // Cartoon FX Particle Text
 
 public class MGLLauncher : MonoBehaviour
 {
@@ -8,68 +8,114 @@ public class MGLLauncher : MonoBehaviour
     public Camera playerCamera;
     public GameObject bombPrefab;
 
-    [Header("Camera Shake")]
-    public float minShakeIntensity = 0.15f;
-    public float maxShakeIntensity = 0.45f;
-    public float shakeDuration = 0.35f;
-
+    [Header("Player")]
+    public FPSPlayerController playerController;
 
     [Header("Firing")]
     public float baseLaunchForce = 22f;
     public float fireRate = 0.6f;
     public float spreadAngle = 1.5f;
 
+    [Header("Momentum Transfer")]
+    [Tooltip("How much player movement contributes to shot force")]
+    public float movementInfluence = 0.65f;
+
+    [Tooltip("Max additional force from movement")]
+    public float maxMovementBoost = 12f;
+
+    [Header("Camera Shake")]
+    public float minShakeIntensity = 0.15f;
+    public float maxShakeIntensity = 0.45f;
+    public float shakeDuration = 0.35f;
+
+    [Header("Shot Feedback VFX (SINGLE)")]
+    [Tooltip("Anchor point for shot feedback (camera / chest / weapon)")]
+    public Transform playerVFXAnchor;
+
+    [Tooltip("CartoonFX Particle Text prefab (Dynamic enabled)")]
+    public GameObject shotFeedbackVFX;
+
+    public float feedbackVfxLifetime = 1.5f;
+
     [Header("Dependencies")]
-    public MGLOscillatingAim aimSystem;
+    public MGLPrecisionAim aimSystem;
 
-    private float nextFireTime;
-    private InputAction fireAction;
+    float nextFireTime;
 
-    void Awake()
-    {
-        fireAction = new InputAction("Fire", InputActionType.Button, "<Mouse>/leftButton");
-    }
+    // ================= EVENT HOOKS =================
 
     void OnEnable()
     {
-        fireAction.Enable();
-        fireAction.canceled += OnFireReleased;
+        if (aimSystem != null)
+            aimSystem.OnFireRequested += HandleFireRequest;
     }
 
     void OnDisable()
     {
-        fireAction.canceled -= OnFireReleased;
-        fireAction.Disable();
+        if (aimSystem != null)
+            aimSystem.OnFireRequested -= HandleFireRequest;
     }
 
-    void OnFireReleased(InputAction.CallbackContext ctx)
+    // ================= FIRING =================
+
+    void HandleFireRequest()
     {
-        if (Time.time < nextFireTime || !aimSystem.IsAiming)
+        if (aimSystem == null || Time.time < nextFireTime)
             return;
 
         FireBomb();
+        SpawnShotFeedback();
+
         nextFireTime = Time.time + fireRate;
     }
 
     void FireBomb()
     {
-        Vector3 spawnPos = firePoint.position + playerCamera.transform.forward * 0.5f;
-        GameObject bomb = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+        // -------- SPAWN --------
+        Vector3 spawnPos =
+            firePoint.position +
+            playerCamera.transform.forward * 0.5f;
+
+        GameObject bomb =
+            Instantiate(bombPrefab, spawnPos, Quaternion.identity);
 
         Rigidbody rb = bomb.GetComponent<Rigidbody>();
         rb.useGravity = true;
         rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
 
-        Vector3 dir = playerCamera.transform.forward;
-        dir = Quaternion.Euler(
+        // -------- DIRECTION --------
+        Vector3 fireDir = playerCamera.transform.forward;
+        fireDir = Quaternion.Euler(
             Random.Range(-spreadAngle, spreadAngle),
             Random.Range(-spreadAngle, spreadAngle),
             0f
-        ) * dir;
+        ) * fireDir;
 
-        float finalForce = baseLaunchForce * aimSystem.CurrentLaunchMultiplier;
-        rb.linearVelocity = dir * finalForce;
+        // -------- PRECISION FORCE --------
+        float precisionForce =
+            baseLaunchForce *
+            aimSystem.CurrentLaunchMultiplier;
 
+        // -------- PLAYER MOMENTUM --------
+        Vector3 playerVelocity =
+            playerController != null
+                ? playerController.CurrentVelocity
+                : Vector3.zero;
+
+        float forwardSpeed =
+            Vector3.Dot(playerVelocity, fireDir.normalized);
+
+        float movementBoost =
+            Mathf.Clamp(
+                forwardSpeed * movementInfluence,
+                0f,
+                maxMovementBoost
+            );
+
+        rb.linearVelocity =
+            fireDir * (precisionForce + movementBoost);
+
+        // -------- PASS DAMAGE DATA --------
         if (bomb.TryGetComponent(out BombProjectile bombLogic))
         {
             bombLogic.SetChargeValues(
@@ -78,22 +124,67 @@ public class MGLLauncher : MonoBehaviour
             );
         }
 
-        float inverted = 1f - aimSystem.CurrentCharge01;
-
-        // stronger shake at perfect timing
-        float shakeIntensity = Mathf.Lerp(
-            minShakeIntensity,
-            maxShakeIntensity,
-            inverted
-        );
+        // -------- CAMERA SHAKE --------
+        float shake =
+            Mathf.Lerp(
+                minShakeIntensity,
+                maxShakeIntensity,
+                aimSystem.CurrentPrecision01
+            );
 
         if (CameraShake.Instance != null)
+            CameraShake.Instance.Shake(shake, shakeDuration);
+    }
+
+    // ================= SHOT FEEDBACK =================
+
+    void SpawnShotFeedback()
+    {
+        if (shotFeedbackVFX == null || playerVFXAnchor == null)
+            return;
+
+        GameObject vfx = Instantiate(
+            shotFeedbackVFX,
+            playerVFXAnchor.position,
+            playerVFXAnchor.rotation,
+            playerVFXAnchor
+        );
+
+        // -------- CARTOON FX TEXT --------
+        if (!vfx.TryGetComponent(out CFXR_ParticleText textFX) || !textFX.isDynamic)
         {
-            CameraShake.Instance.Shake(
-                shakeIntensity,
-                shakeDuration
-            );
+            Debug.LogWarning("Shot Feedback VFX must have Dynamic CFXR_ParticleText");
+            Destroy(vfx);
+            return;
         }
-        aimSystem.StopAiming();
+
+        string text;
+        Color color;
+
+        switch (aimSystem.CurrentShotQuality)
+        {
+            case ShotQuality.Perfect:
+                text = "PERFECT!";
+                color = Color.green;
+                break;
+
+            case ShotQuality.Sloppy:
+                text = "SLOPPY!";
+                color = Color.red;
+                break;
+
+            default:
+                text = "OK";
+                color = Color.yellow;
+                break;
+        }
+
+        textFX.UpdateText(
+            newText: text,
+            newColor1: color,
+            newColor2: color
+        );
+
+        Destroy(vfx, feedbackVfxLifetime);
     }
 }

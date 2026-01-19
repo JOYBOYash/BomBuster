@@ -9,11 +9,21 @@ public class BombProjectile : MonoBehaviour
     {
         public LayerMask layer;
         public GameObject explosionEffect;
+
+        [Header("Timing")]
         public float expandTime;
         public float bombHideDelay;
+
+        [Header("Visual Scale Control")]
+        [Tooltip("Multiplier applied to explosionRadius for VFX only")]
+        public float visualRadiusMultiplier;
+
+        [Tooltip("Absolute clamp for explosion VFX size")]
+        public float minVisualScale;
+        public float maxVisualScale;
     }
 
-    [Header("Explosion")]
+    [Header("Explosion Gameplay")]
     public float explosionRadius = 6f;
     public float explosionForce = 700f;
     public float maxDamage = 100f;
@@ -28,6 +38,11 @@ public class BombProjectile : MonoBehaviour
     public float defaultExpandTime = 0.4f;
     public float defaultBombHideDelay = 0.05f;
 
+    [Header("Default Visual Scale")]
+    public float defaultVisualRadiusMultiplier = 0.6f;
+    public float defaultMinVisualScale = 1.5f;
+    public float defaultMaxVisualScale = 6f;
+
     [Header("Explosion Effects")]
     public GameObject defaultExplosionEffect;
     public ExplosionEffectRule[] layerExplosionEffects;
@@ -37,10 +52,10 @@ public class BombProjectile : MonoBehaviour
     public float maxShakeIntensity = 0.6f;
     public float shakeDuration = 0.45f;
 
-    private Rigidbody rb;
-    private Collider col;
-    private Renderer[] renderers;
-    private bool hasExploded;
+    Rigidbody rb;
+    Collider col;
+    Renderer[] renderers;
+    bool hasExploded;
 
     void Awake()
     {
@@ -69,7 +84,10 @@ public class BombProjectile : MonoBehaviour
             hitCollider,
             out GameObject effectPrefab,
             out float expandTime,
-            out float hideDelay
+            out float hideDelay,
+            out float visualMultiplier,
+            out float minScale,
+            out float maxScale
         );
 
         GameObject explosionFX = null;
@@ -79,15 +97,20 @@ public class BombProjectile : MonoBehaviour
             explosionFX.transform.localScale = Vector3.zero;
         }
 
-        // ---------------- GAMEPLAY EFFECTS ----------------
+        // Gameplay
         ApplyExplosionDamage(hitPoint);
         StartCoroutine(ShockwaveRoutine(hitPoint));
-
-        // ---------------- CAMERA SHAKE ----------------
         TriggerExplosionShake(hitPoint);
 
         yield return new WaitForSeconds(hideDelay);
         HideBombVisuals();
+
+        float targetVisualSize =
+            Mathf.Clamp(
+                explosionRadius * visualMultiplier,
+                minScale,
+                maxScale
+            ) * 2f; // diameter
 
         float timer = 0f;
         while (timer < expandTime)
@@ -97,7 +120,7 @@ public class BombProjectile : MonoBehaviour
 
             if (explosionFX != null)
             {
-                float scale = Mathf.Lerp(0f, explosionRadius * 2f, t);
+                float scale = Mathf.Lerp(0f, targetVisualSize, t);
                 explosionFX.transform.localScale = Vector3.one * scale;
             }
 
@@ -117,13 +140,14 @@ public class BombProjectile : MonoBehaviour
         if (CameraShake.Instance == null)
             return;
 
-        // Optional distance-based attenuation (player far = weaker shake)
         float distance = Vector3.Distance(
             CameraShake.Instance.transform.position,
             explosionPoint
         );
 
-        float distanceFactor = Mathf.Clamp01(1f - (distance / (explosionRadius * 3f)));
+        float distanceFactor = Mathf.Clamp01(
+            1f - (distance / (explosionRadius * 3f))
+        );
 
         float finalShake = Mathf.Lerp(
             minShakeIntensity,
@@ -221,7 +245,7 @@ public class BombProjectile : MonoBehaviour
         }
     }
 
-    // ================= CHARGE DATA =================
+    // ================= CHARGE =================
 
     public void SetChargeValues(float radius, float damageMultiplier)
     {
@@ -243,12 +267,19 @@ public class BombProjectile : MonoBehaviour
         Collider hitCollider,
         out GameObject effect,
         out float expandTime,
-        out float hideDelay
+        out float hideDelay,
+        out float visualMultiplier,
+        out float minScale,
+        out float maxScale
     )
     {
         effect = defaultExplosionEffect;
         expandTime = defaultExpandTime;
         hideDelay = defaultBombHideDelay;
+
+        visualMultiplier = defaultVisualRadiusMultiplier;
+        minScale = defaultMinVisualScale;
+        maxScale = defaultMaxVisualScale;
 
         foreach (var rule in layerExplosionEffects)
         {
@@ -257,6 +288,10 @@ public class BombProjectile : MonoBehaviour
                 effect = rule.explosionEffect;
                 expandTime = rule.expandTime;
                 hideDelay = rule.bombHideDelay;
+
+                visualMultiplier = rule.visualRadiusMultiplier;
+                minScale = rule.minVisualScale;
+                maxScale = rule.maxVisualScale;
                 return;
             }
         }
