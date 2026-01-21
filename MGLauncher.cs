@@ -1,5 +1,5 @@
 using UnityEngine;
-using CartoonFX; // Cartoon FX Particle Text
+using CartoonFX;
 
 public class MGLLauncher : MonoBehaviour
 {
@@ -16,11 +16,12 @@ public class MGLLauncher : MonoBehaviour
     public float fireRate = 0.6f;
     public float spreadAngle = 1.5f;
 
-    [Header("Momentum Transfer")]
-    [Tooltip("How much player movement contributes to shot force")]
-    public float movementInfluence = 0.65f;
+    [Header("Burst / Reload")]
+    public int bombsPerBurst = 3;
+    public float reloadDuration = 1.2f;
 
-    [Tooltip("Max additional force from movement")]
+    [Header("Momentum Transfer")]
+    public float movementInfluence = 0.65f;
     public float maxMovementBoost = 12f;
 
     [Header("Camera Shake")]
@@ -28,21 +29,28 @@ public class MGLLauncher : MonoBehaviour
     public float maxShakeIntensity = 0.45f;
     public float shakeDuration = 0.35f;
 
-    [Header("Shot Feedback VFX (SINGLE)")]
-    [Tooltip("Anchor point for shot feedback (camera / chest / weapon)")]
+    [Header("Shot Feedback VFX")]
     public Transform playerVFXAnchor;
-
-    [Tooltip("CartoonFX Particle Text prefab (Dynamic enabled)")]
     public GameObject shotFeedbackVFX;
-
     public float feedbackVfxLifetime = 1.5f;
+
+    [Header("Shot Quality Thresholds")]
+    [Range(0f, 1f)] public float perfectThreshold = 0.85f;
+    [Range(0f, 1f)] public float sloppyThreshold = 0.3f;
 
     [Header("Dependencies")]
     public MGLPrecisionAim aimSystem;
 
     float nextFireTime;
+    int shotsInBurst;
+    bool isReloading;
+    float reloadEndTime;
 
-    // ================= EVENT HOOKS =================
+    // -------- VFX Pool --------
+    GameObject feedbackInstance;
+    CFXR_ParticleText cachedTextFX;
+    ParticleSystem[] cachedParticles;
+    float feedbackDisableTime;
 
     void OnEnable()
     {
@@ -56,66 +64,66 @@ public class MGLLauncher : MonoBehaviour
             aimSystem.OnFireRequested -= HandleFireRequest;
     }
 
+    void Update()
+    {
+        if (isReloading && Time.time >= reloadEndTime)
+        {
+            isReloading = false;
+            shotsInBurst = 0;
+        }
+
+        if (feedbackInstance != null &&
+            feedbackInstance.activeSelf &&
+            Time.time >= feedbackDisableTime)
+        {
+            feedbackInstance.SetActive(false);
+        }
+    }
+
     // ================= FIRING =================
 
     void HandleFireRequest()
     {
-        if (aimSystem == null || Time.time < nextFireTime)
-            return;
+        if (aimSystem == null) return;
+        if (isReloading) return;
+        if (Time.time < nextFireTime) return;
 
         FireBomb();
-        SpawnShotFeedback();
+        ShowShotFeedback();
 
+        shotsInBurst++;
         nextFireTime = Time.time + fireRate;
+
+        if (shotsInBurst >= bombsPerBurst)
+        {
+            isReloading = true;
+            reloadEndTime = Time.time + reloadDuration;
+        }
     }
 
     void FireBomb()
     {
-        // -------- SPAWN --------
-        Vector3 spawnPos =
-            firePoint.position +
-            playerCamera.transform.forward * 0.5f;
-
-        GameObject bomb =
-            Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+        Vector3 spawnPos = firePoint.position + playerCamera.transform.forward * 0.5f;
+        GameObject bomb = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
 
         Rigidbody rb = bomb.GetComponent<Rigidbody>();
         rb.useGravity = true;
         rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
 
-        // -------- DIRECTION --------
-        Vector3 fireDir = playerCamera.transform.forward;
-        fireDir = Quaternion.Euler(
+        Vector3 fireDir = Quaternion.Euler(
             Random.Range(-spreadAngle, spreadAngle),
             Random.Range(-spreadAngle, spreadAngle),
             0f
-        ) * fireDir;
+        ) * playerCamera.transform.forward;
 
-        // -------- PRECISION FORCE --------
-        float precisionForce =
-            baseLaunchForce *
-            aimSystem.CurrentLaunchMultiplier;
+        float precisionForce = baseLaunchForce * aimSystem.CurrentLaunchMultiplier;
 
-        // -------- PLAYER MOMENTUM --------
-        Vector3 playerVelocity =
-            playerController != null
-                ? playerController.CurrentVelocity
-                : Vector3.zero;
+        Vector3 playerVel = playerController != null ? playerController.CurrentVelocity : Vector3.zero;
+        float forwardSpeed = Vector3.Dot(playerVel, fireDir.normalized);
+        float movementBoost = Mathf.Clamp(forwardSpeed * movementInfluence, 0f, maxMovementBoost);
 
-        float forwardSpeed =
-            Vector3.Dot(playerVelocity, fireDir.normalized);
+        rb.linearVelocity = fireDir * (precisionForce + movementBoost);
 
-        float movementBoost =
-            Mathf.Clamp(
-                forwardSpeed * movementInfluence,
-                0f,
-                maxMovementBoost
-            );
-
-        rb.linearVelocity =
-            fireDir * (precisionForce + movementBoost);
-
-        // -------- PASS DAMAGE DATA --------
         if (bomb.TryGetComponent(out BombProjectile bombLogic))
         {
             bombLogic.SetChargeValues(
@@ -124,67 +132,76 @@ public class MGLLauncher : MonoBehaviour
             );
         }
 
-        // -------- CAMERA SHAKE --------
-        float shake =
-            Mathf.Lerp(
-                minShakeIntensity,
-                maxShakeIntensity,
-                aimSystem.CurrentPrecision01
-            );
-
+        float shake = Mathf.Lerp(minShakeIntensity, maxShakeIntensity, aimSystem.CurrentPrecision01);
         if (CameraShake.Instance != null)
             CameraShake.Instance.Shake(shake, shakeDuration);
     }
 
     // ================= SHOT FEEDBACK =================
 
-    void SpawnShotFeedback()
+    void ShowShotFeedback()
     {
         if (shotFeedbackVFX == null || playerVFXAnchor == null)
             return;
 
-        GameObject vfx = Instantiate(
-            shotFeedbackVFX,
-            playerVFXAnchor.position,
-            playerVFXAnchor.rotation,
-            playerVFXAnchor
-        );
-
-        // -------- CARTOON FX TEXT --------
-        if (!vfx.TryGetComponent(out CFXR_ParticleText textFX) || !textFX.isDynamic)
+        if (feedbackInstance == null)
         {
-            Debug.LogWarning("Shot Feedback VFX must have Dynamic CFXR_ParticleText");
-            Destroy(vfx);
-            return;
+            feedbackInstance = Instantiate(
+                shotFeedbackVFX,
+                playerVFXAnchor.position,
+                playerVFXAnchor.rotation,
+                playerVFXAnchor
+            );
+
+            cachedTextFX = feedbackInstance.GetComponent<CFXR_ParticleText>();
+            cachedParticles = feedbackInstance.GetComponentsInChildren<ParticleSystem>(true);
+
+            if (cachedTextFX == null || !cachedTextFX.isDynamic)
+            {
+                Debug.LogError("Shot Feedback VFX must use Dynamic CFXR_ParticleText");
+                return;
+            }
+
+            feedbackInstance.SetActive(false);
         }
+
+        float p = aimSystem.CurrentPrecision01;
 
         string text;
         Color color;
 
-        switch (aimSystem.CurrentShotQuality)
+        if (p >= perfectThreshold)
         {
-            case ShotQuality.Perfect:
-                text = "PERFECT!";
-                color = Color.green;
-                break;
-
-            case ShotQuality.Sloppy:
-                text = "SLOPPY!";
-                color = Color.red;
-                break;
-
-            default:
-                text = "OK";
-                color = Color.yellow;
-                break;
+            text = "PERFECT!";
+            color = Color.green;
+        }
+        else if (p <= sloppyThreshold)
+        {
+            text = "SLOPPY!";
+            color = Color.red;
+        }
+        else
+        {
+            text = "OK";
+            color = Color.yellow;
         }
 
-        textFX.UpdateText(
-            newText: text,
-            newColor1: color,
-            newColor2: color
+        cachedTextFX.UpdateText(text, null, color, color);
+
+        feedbackInstance.transform.SetPositionAndRotation(
+            playerVFXAnchor.position,
+            playerVFXAnchor.rotation
         );
 
-        Destroy(vfx, feedbackVfxLifetime);
+        feedbackInstance.SetActive(true);
+
+        // 🔥 FORCE RESTART PARTICLES (THIS WAS THE MISSING PIECE)
+        foreach (var ps in cachedParticles)
+        {
+            ps.Clear(true);
+            ps.Play(true);
+        }
+
+        feedbackDisableTime = Time.time + feedbackVfxLifetime;
     }
 }
