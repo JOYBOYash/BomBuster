@@ -52,6 +52,13 @@ public class BombProjectile : MonoBehaviour
     public float maxShakeIntensity = 0.6f;
     public float shakeDuration = 0.45f;
 
+    // ================= NEW: EXPLOSION AUDIO =================
+    [Header("Explosion Audio (ADDITIVE)")]
+    public AudioClip explosionImpactClip;
+    [Range(0f, 1f)] public float explosionVolume = 1f;
+    [Tooltip("How far the explosion sound can be heard")]
+public float explosionMaxDistance = 30f;
+
     Rigidbody rb;
     Collider col;
     Renderer[] renderers;
@@ -97,6 +104,9 @@ public class BombProjectile : MonoBehaviour
             explosionFX.transform.localScale = Vector3.zero;
         }
 
+        // ================= ADDITIVE AUDIO =================
+        PlayExplosionSound(hitPoint);
+
         // Gameplay
         ApplyExplosionDamage(hitPoint);
         StartCoroutine(ShockwaveRoutine(hitPoint));
@@ -132,6 +142,32 @@ public class BombProjectile : MonoBehaviour
 
         Destroy(gameObject);
     }
+
+    // ================= ADDITIVE AUDIO =================
+
+    void PlayExplosionSound(Vector3 position)
+    {
+        if (explosionImpactClip == null)
+            return;
+
+        GameObject audioGO = new GameObject("Explosion_Audio");
+        audioGO.transform.position = position;
+
+        AudioSource src = audioGO.AddComponent<AudioSource>();
+        src.clip = explosionImpactClip;
+        src.volume = explosionVolume;
+        src.spatialBlend = 1f;          // FULL 3D
+        src.rolloffMode = AudioRolloffMode.Logarithmic;
+        src.minDistance = 1.5f;
+        src.maxDistance = explosionMaxDistance;
+        src.dopplerLevel = 0f;          // explosions shouldn't Doppler
+        src.playOnAwake = false;
+
+        src.Play();
+
+        Destroy(audioGO, explosionImpactClip.length + 0.1f);
+    }
+
 
     // ================= CAMERA SHAKE =================
 

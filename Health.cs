@@ -3,14 +3,14 @@ using UnityEngine;
 public class Health : MonoBehaviour
 {
     public float maxHealth = 100f;
-    private float currentHealth;
+    protected float currentHealth;
 
-    void Awake()
+    protected virtual void Awake()
     {
         currentHealth = maxHealth;
     }
 
-    public void TakeDamage(float damage)
+    public virtual void TakeDamage(float damage)
     {
         currentHealth -= damage;
 
@@ -20,7 +20,7 @@ public class Health : MonoBehaviour
         }
     }
 
-    void Die()
+    protected virtual void Die()
     {
         Destroy(gameObject);
     }

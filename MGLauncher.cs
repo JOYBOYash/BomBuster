@@ -1,6 +1,7 @@
 using UnityEngine;
 using CartoonFX;
 
+[RequireComponent(typeof(AudioSource))]
 public class MGLLauncher : MonoBehaviour
 {
     [Header("References")]
@@ -20,6 +21,11 @@ public class MGLLauncher : MonoBehaviour
     public int bombsPerBurst = 3;
     public float reloadDuration = 1.2f;
 
+    [Tooltip("Read-only: current reload time remaining")]
+    public float ReloadTimeRemaining { get; private set; }
+
+    public bool IsReloading => isReloading;
+
     [Header("Momentum Transfer")]
     public float movementInfluence = 0.65f;
     public float maxMovementBoost = 12f;
@@ -38,19 +44,48 @@ public class MGLLauncher : MonoBehaviour
     [Range(0f, 1f)] public float perfectThreshold = 0.85f;
     [Range(0f, 1f)] public float sloppyThreshold = 0.3f;
 
+    // ================= AUDIO =================
+
+    [Header("🔊 Sound Effects")]
+    public AudioClip fireClip;
+    [Range(0f, 1f)] public float fireVolume = 1f;
+
+    public AudioClip perfectShotClip;
+    [Range(0f, 1f)] public float perfectVolume = 1f;
+
+    public AudioClip sloppyShotClip;
+    [Range(0f, 1f)] public float sloppyVolume = 1f;
+
+    public AudioClip reloadClip;
+    [Range(0f, 1f)] public float reloadVolume = 1f;
+
+    public AudioClip reloadCompleteClip;
+    [Range(0f, 1f)] public float reloadCompleteVolume = 1f;
+
     [Header("Dependencies")]
     public MGLPrecisionAim aimSystem;
 
+    // ================= STATE =================
     float nextFireTime;
     int shotsInBurst;
     bool isReloading;
     float reloadEndTime;
 
-    // -------- VFX Pool --------
+    // ================= AUDIO =================
+    AudioSource audioSource;
+
+    // ================= VFX POOL =================
     GameObject feedbackInstance;
     CFXR_ParticleText cachedTextFX;
     ParticleSystem[] cachedParticles;
     float feedbackDisableTime;
+
+    void Awake()
+    {
+        audioSource = GetComponent<AudioSource>();
+        audioSource.playOnAwake = false;
+        audioSource.spatialBlend = 0f; // 2D FPS sound
+    }
 
     void OnEnable()
     {
@@ -66,12 +101,22 @@ public class MGLLauncher : MonoBehaviour
 
     void Update()
     {
-        if (isReloading && Time.time >= reloadEndTime)
+        // ================= RELOAD TIMER =================
+        if (isReloading)
         {
-            isReloading = false;
-            shotsInBurst = 0;
+            ReloadTimeRemaining = Mathf.Max(0f, reloadEndTime - Time.time);
+
+            if (Time.time >= reloadEndTime)
+            {
+                isReloading = false;
+                shotsInBurst = 0;
+                ReloadTimeRemaining = 0f;
+
+                PlaySFX(reloadCompleteClip, reloadCompleteVolume);
+            }
         }
 
+        // ================= VFX LIFETIME =================
         if (feedbackInstance != null &&
             feedbackInstance.activeSelf &&
             Time.time >= feedbackDisableTime)
@@ -84,9 +129,12 @@ public class MGLLauncher : MonoBehaviour
 
     void HandleFireRequest()
     {
-        if (aimSystem == null) return;
-        if (isReloading) return;
-        if (Time.time < nextFireTime) return;
+        // ❌ HARD BLOCK DURING RELOAD
+        if (aimSystem == null || isReloading)
+            return;
+
+        if (Time.time < nextFireTime)
+            return;
 
         FireBomb();
         ShowShotFeedback();
@@ -96,15 +144,27 @@ public class MGLLauncher : MonoBehaviour
 
         if (shotsInBurst >= bombsPerBurst)
         {
-            isReloading = true;
-            reloadEndTime = Time.time + reloadDuration;
+            BeginReload();
         }
+    }
+
+    void BeginReload()
+    {
+        isReloading = true;
+        reloadEndTime = Time.time + reloadDuration;
+        ReloadTimeRemaining = reloadDuration;
+
+        PlaySFX(reloadClip, reloadVolume);
     }
 
     void FireBomb()
     {
-        Vector3 spawnPos = firePoint.position + playerCamera.transform.forward * 0.5f;
-        GameObject bomb = Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+        Vector3 spawnPos =
+            firePoint.position +
+            playerCamera.transform.forward * 0.5f;
+
+        GameObject bomb =
+            Instantiate(bombPrefab, spawnPos, Quaternion.identity);
 
         Rigidbody rb = bomb.GetComponent<Rigidbody>();
         rb.useGravity = true;
@@ -116,13 +176,28 @@ public class MGLLauncher : MonoBehaviour
             0f
         ) * playerCamera.transform.forward;
 
-        float precisionForce = baseLaunchForce * aimSystem.CurrentLaunchMultiplier;
+        float precisionForce =
+            baseLaunchForce * aimSystem.CurrentLaunchMultiplier;
 
-        Vector3 playerVel = playerController != null ? playerController.CurrentVelocity : Vector3.zero;
-        float forwardSpeed = Vector3.Dot(playerVel, fireDir.normalized);
-        float movementBoost = Mathf.Clamp(forwardSpeed * movementInfluence, 0f, maxMovementBoost);
+        Vector3 playerVel =
+            playerController != null
+                ? playerController.CurrentVelocity
+                : Vector3.zero;
 
-        rb.linearVelocity = fireDir * (precisionForce + movementBoost);
+        float forwardSpeed =
+            Vector3.Dot(playerVel, fireDir.normalized);
+
+        float movementBoost =
+            Mathf.Clamp(
+                forwardSpeed * movementInfluence,
+                0f,
+                maxMovementBoost
+            );
+
+        rb.linearVelocity =
+            fireDir * (precisionForce + movementBoost);
+
+        PlaySFX(fireClip, fireVolume);
 
         if (bomb.TryGetComponent(out BombProjectile bombLogic))
         {
@@ -132,7 +207,13 @@ public class MGLLauncher : MonoBehaviour
             );
         }
 
-        float shake = Mathf.Lerp(minShakeIntensity, maxShakeIntensity, aimSystem.CurrentPrecision01);
+        float shake =
+            Mathf.Lerp(
+                minShakeIntensity,
+                maxShakeIntensity,
+                aimSystem.CurrentPrecision01
+            );
+
         if (CameraShake.Instance != null)
             CameraShake.Instance.Shake(shake, shakeDuration);
     }
@@ -174,11 +255,13 @@ public class MGLLauncher : MonoBehaviour
         {
             text = "PERFECT!";
             color = Color.green;
+            PlaySFX(perfectShotClip, perfectVolume);
         }
         else if (p <= sloppyThreshold)
         {
             text = "SLOPPY!";
             color = Color.red;
+            PlaySFX(sloppyShotClip, sloppyVolume);
         }
         else
         {
@@ -195,7 +278,6 @@ public class MGLLauncher : MonoBehaviour
 
         feedbackInstance.SetActive(true);
 
-        // 🔥 FORCE RESTART PARTICLES (THIS WAS THE MISSING PIECE)
         foreach (var ps in cachedParticles)
         {
             ps.Clear(true);
@@ -203,5 +285,16 @@ public class MGLLauncher : MonoBehaviour
         }
 
         feedbackDisableTime = Time.time + feedbackVfxLifetime;
+    }
+
+
+    // ================= AUDIO =================
+
+    void PlaySFX(AudioClip clip, float volume)
+    {
+        if (clip == null || audioSource == null)
+            return;
+
+        audioSource.PlayOneShot(clip, volume);
     }
 }
